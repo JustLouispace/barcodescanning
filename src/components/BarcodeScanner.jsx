@@ -36,17 +36,49 @@ export default function BarcodeScanner({ active, onResult }) {
   }, []);
 
   useEffect(() => {
-    if (!active || !deviceId || !videoRef.current) return;
-    let cleanup = () => {};
-    reader.decodeFromVideoDevice(
-      deviceId,
-      videoRef.current,
-      (result, err, controls) => {
-        cleanup = () => controls?.stop();
-        if (result) onResult?.(result.getText());
+    if (!active || !videoRef.current) return;
+    let stopped = false;
+    let stop = () => {};
+
+    const callback = (result, err, controls) => {
+      if (controls && typeof controls.stop === 'function') {
+        stop = () => controls.stop();
       }
-    );
-    return () => cleanup();
+      if (result) {
+        onResult?.(result.getText());
+      }
+      // Note: do not set error on every decode error; ZXing emits frequent decode errors during scanning.
+    };
+
+    // If we have a selected deviceId, use it. Otherwise, use facingMode to trigger permission prompt on iOS.
+    if (deviceId) {
+      reader.decodeFromVideoDevice(deviceId, videoRef.current, callback);
+    } else {
+      reader.decodeFromConstraints(
+        {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            aspectRatio: { ideal: 16 / 9 },
+          },
+          audio: false,
+        },
+        videoRef.current,
+        callback
+      ).catch((e) => {
+        // Show a readable error for common cases like permission denied or unsupported constraints
+        const msg = typeof e?.message === 'string' ? e.message : String(e || 'Unknown camera error');
+        setError(msg.includes('denied') ? 'Camera permission denied. Please allow camera access in Safari settings.' : `Camera error: ${msg}`);
+      });
+    }
+
+    return () => {
+      if (!stopped) {
+        try { stop(); } catch {}
+        stopped = true;
+      }
+    };
   }, [active, deviceId, reader, onResult]);
 
   return (
