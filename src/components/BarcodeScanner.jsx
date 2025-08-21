@@ -16,11 +16,19 @@ export default function BarcodeScanner({ active, onResult }) {
       BarcodeFormat.UPC_A,
       BarcodeFormat.QR_CODE,
     ]);
+    // Encourage deeper search for difficult 1D barcodes (helps in landscape)
+    hints.set(DecodeHintType.TRY_HARDER, true);
     return new BrowserMultiFormatReader(hints, 300);
   });
   const [deviceId, setDeviceId] = useState(null);
   const [devices, setDevices] = useState([]);
   const [error, setError] = useState('');
+  const [isLandscape, setIsLandscape] = useState(() => {
+    try {
+      if (window?.matchMedia) return window.matchMedia('(orientation: landscape)').matches;
+      return (window?.innerWidth || 0) > (window?.innerHeight || 0);
+    } catch { return false; }
+  });
 
   useEffect(() => {
     (async () => {
@@ -33,6 +41,22 @@ export default function BarcodeScanner({ active, onResult }) {
         setError('No camera devices found or permission denied.');
       }
     })();
+  }, []);
+
+  // Track orientation changes to adjust constraints and preview size
+  useEffect(() => {
+    const onChange = () => {
+      try {
+        const land = window?.matchMedia ? window.matchMedia('(orientation: landscape)').matches : window.innerWidth > window.innerHeight;
+        setIsLandscape(land);
+      } catch {}
+    };
+    window.addEventListener('resize', onChange);
+    window.addEventListener('orientationchange', onChange);
+    return () => {
+      window.removeEventListener('resize', onChange);
+      window.removeEventListener('orientationchange', onChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -50,28 +74,28 @@ export default function BarcodeScanner({ active, onResult }) {
       // Note: do not set error on every decode error; ZXing emits frequent decode errors during scanning.
     };
 
-    // If we have a selected deviceId, use it. Otherwise, use facingMode to trigger permission prompt on iOS.
-    if (deviceId) {
-      reader.decodeFromVideoDevice(deviceId, videoRef.current, callback);
-    } else {
-      reader.decodeFromConstraints(
-        {
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            aspectRatio: { ideal: 16 / 9 },
-          },
-          audio: false,
-        },
-        videoRef.current,
-        callback
-      ).catch((e) => {
-        // Show a readable error for common cases like permission denied or unsupported constraints
-        const msg = typeof e?.message === 'string' ? e.message : String(e || 'Unknown camera error');
-        setError(msg.includes('denied') ? 'Camera permission denied. Please allow camera access in Safari settings.' : `Camera error: ${msg}`);
-      });
-    }
+    // Always use constraints so we can set resolution and optionally target a device
+    const widthIdeal = isLandscape ? 1920 : 1280;
+    const heightIdeal = isLandscape ? 1080 : 720;
+    const constraints = {
+      video: {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }),
+        width: { ideal: widthIdeal },
+        height: { ideal: heightIdeal },
+        aspectRatio: { ideal: 16 / 9 },
+      },
+      audio: false,
+    };
+
+    reader.decodeFromConstraints(
+      constraints,
+      videoRef.current,
+      callback
+    ).catch((e) => {
+      // Show a readable error for common cases like permission denied or unsupported constraints
+      const msg = typeof e?.message === 'string' ? e.message : String(e || 'Unknown camera error');
+      setError(msg.includes('denied') ? 'Camera permission denied. Please allow camera access in Safari settings.' : `Camera error: ${msg}`);
+    });
 
     return () => {
       if (!stopped) {
@@ -79,13 +103,23 @@ export default function BarcodeScanner({ active, onResult }) {
         stopped = true;
       }
     };
-  }, [active, deviceId, reader, onResult]);
+  }, [active, deviceId, isLandscape, reader, onResult]);
 
   return (
     <div style={{ display: 'grid', gap: 8 }}>
       {active && (
         <>
-          <video ref={videoRef} style={{ width: '100%', maxWidth: 480, borderRadius: 8 }} muted autoPlay playsInline />
+          <video
+            ref={videoRef}
+            style={{
+              width: '100%',
+              maxWidth: isLandscape ? 800 : 480,
+              borderRadius: 8,
+            }}
+            muted
+            autoPlay
+            playsInline
+          />
           {devices.length > 1 && (
             <select value={deviceId || ''} onChange={e => setDeviceId(e.target.value)}>
               {devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>)}
